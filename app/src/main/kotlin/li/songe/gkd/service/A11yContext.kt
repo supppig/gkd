@@ -35,8 +35,17 @@ class A11yContext(
     private var parentCache = LruCache<AccessibilityNodeInfo, AccessibilityNodeInfo>(MAX_CACHE_SIZE)
     var rootCache: AccessibilityNodeInfo? = null
 
-    private fun clearNodeCache() {
-        rootCache = null
+    private fun clearNodeCache(t: Long = System.currentTimeMillis()) {
+        if (META.debuggable) {
+            val sizeList = listOf(childCache.size(), parentCache.size(), indexCache.size())
+            if (sizeList.any { it > 0 }) {
+                Log.d("cache", "clear cache -> $sizeList")
+            }
+        }
+        lastClearTime = t
+        if (rootCache?.packageName != topActivityFlow.value.appId) {
+            rootCache = null
+        }
         try {
             childCache.evictAll()
             parentCache.evictAll()
@@ -51,17 +60,16 @@ class A11yContext(
     }
 
     private var lastClearTime = 0L
+    private var lastAppChangeTime = appChangeTime
     private fun clearNodeCacheIfTimeout() {
-        val currentTime = System.currentTimeMillis()
-        if (currentTime - lastClearTime > 5000L) {
-            lastClearTime = currentTime
-            if (META.debuggable) {
-                val sizeList = listOf(childCache.size(), parentCache.size(), indexCache.size())
-                if (sizeList.any { it > 0 }) {
-                    Log.d("cache", "clear cache -> $sizeList")
-                }
-            }
+        if (appChangeTime != lastAppChangeTime) {
+            lastAppChangeTime = appChangeTime
             clearNodeCache()
+            return
+        }
+        val t = System.currentTimeMillis()
+        if (t - lastClearTime > 30_000L) {
+            clearNodeCache(t)
         }
     }
 
@@ -74,10 +82,10 @@ class A11yContext(
     private fun guardInterrupt() {
         if (disableInterrupt) return
         if (interruptInnerKey == interruptKey) return
-        if (!activityRuleFlow.value.activePriority) return
-        val rule = currentRule ?: return
-        if (rule.isPriority()) return
         interruptInnerKey = interruptKey
+        val rule = currentRule ?: return
+        if (!activityRuleFlow.value.currentRules.any { it === rule }) return
+        if (rule.isPriority()) return
         if (META.debuggable) {
             Log.d("guardInterrupt", "中断 rule=${rule.statusText()}")
         }
